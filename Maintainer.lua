@@ -9,15 +9,48 @@ local items = cfg.items
 local sleepInterval = cfg.sleep
 local timezone = cfg.timezone or 0  -- Default 0 (UTC) if not set
 
+-- Try to get internet component for real time
+local internet = nil
+local hasInternet = component.isAvailable("internet")
+if hasInternet then
+  internet = component.internet
+end
+
+-- Cache real time (update every 100 calls to reduce requests)
+local cachedRealTime = 0
+local realTimeCounter = 100
+
 -- Auto-update check
 pcall(function()
   local shell = require("shell")
   shell.execute("updater silent")
 end)
 
--- Function to get time with timezone offset
+-- Function to get real world time with timezone offset
 local function getLocalTime()
-  return os.date("%H:%M:%S", os.time() + (timezone * 3600))
+  -- Try to use internet card for real time
+  if hasInternet and internet then
+    -- Update cache every 100 calls
+    if realTimeCounter >= 100 then
+      pcall(function()
+        cachedRealTime = internet.time()
+      end)
+      realTimeCounter = 0
+    end
+    realTimeCounter = realTimeCounter + 1
+    
+    -- If we have real time, use it
+    if cachedRealTime > 0 then
+      local adjustedTime = cachedRealTime + (timezone * 3600)
+      return os.date("%H:%M:%S", adjustedTime)
+    end
+  end
+  
+  -- Fallback: use os.date with timezone offset
+  -- This uses the server's system time
+  local currentTime = os.time()
+  local adjustedTime = currentTime + (timezone * 3600)
+  return os.date("%H:%M:%S", adjustedTime)
 end
 
 local function exitMaintainer()
@@ -57,19 +90,15 @@ while true do
     if itemsCrafting[item] then
       logInfo(item .. ": is already being crafted, skipping...")
     else
-      -- Support both formats:
-      -- Old: {{item_id = "...", item_meta = ...}, threshold, batch_size}
-      -- New: {threshold, batch_size}
+      -- Support both formats
       local data, threshold, batch_size
       
       if type(cfgItem[1]) == "table" then
-        -- Old format
         data = cfgItem[1]
         threshold = cfgItem[2]
         batch_size = cfgItem[3]
       else
-        -- New simplified format
-        data = nil  -- Will be auto-detected
+        data = nil
         threshold = cfgItem[1]
         batch_size = cfgItem[2]
       end
@@ -78,11 +107,11 @@ while true do
       
       local color = nil
       if msg:find("^Failed to request") then
-        color = 0xFF0000 -- red
+        color = 0xFF0000
       elseif msg:find("^Requested") then
-        color = 0xFFFF00 -- yellow
+        color = 0xFFFF00
       elseif msg:find("The amount %(") and msg:find("Aborting request%.$") then
-        color = 0x00FF00 -- green
+        color = 0x00FF00
       end
 
       logInfoColoredAfterColon(item .. ": " .. msg, color)
@@ -90,7 +119,7 @@ while true do
   end
 
   local _, _, _, code = event.pull(sleepInterval, "key_down")
-  if code == 0x10 then -- Q key
+  if code == 0x10 then
     exitMaintainer()
   end
 end
