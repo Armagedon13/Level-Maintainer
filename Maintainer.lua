@@ -8,7 +8,7 @@ local cfg = require("config")
 
 local items = cfg.items
 local sleepInterval = cfg.sleep
-local timezone = cfg.timezone or 0  -- Default 0 (UTC) if not set
+local timezone = cfg.timezone or 0
 
 -- Auto-update check
 pcall(function()
@@ -16,38 +16,30 @@ pcall(function()
   shell.execute("updater silent")
 end)
 
--- Function to get real system time using filesystem trick
 local function getRealTime()
   local tempfile = "/tmp/timefile"
-  local file = filesystem.open(tempfile, "a")  -- Create/touch file
+  local file = filesystem.open(tempfile, "a")
   if file then
     file:close()
-    local timestamp = filesystem.lastModified(tempfile) / 1000  -- Convert ms to seconds
+    local timestamp = filesystem.lastModified(tempfile) / 1000
     filesystem.remove(tempfile)
     return timestamp
   else
-    -- Fallback to os.time() if file creation fails
     return os.time()
   end
 end
 
--- Function to get time with timezone offset
 local function getLocalTime()
   local realTime = getRealTime()
-  local offsetTime = realTime + (timezone * 3600)  -- Apply timezone offset
+  local offsetTime = realTime + (timezone * 3600)
   
   local timetable = os.date("*t", offsetTime)
   
-  -- Format minutes with leading zero
   local min = timetable.min
-  if min < 10 then
-    min = "0" .. min
-  end
+  if min < 10 then min = "0" .. min end
   
   local sec = timetable.sec
-  if sec < 10 then
-    sec = "0" .. sec
-  end
+  if sec < 10 then sec = "0" .. sec end
   
   return timetable.hour .. ":" .. min .. ":" .. sec
 end
@@ -87,9 +79,9 @@ while true do
 
   for item, cfgItem in pairs(items) do
     if itemsCrafting[item] then
-      logInfo(item .. ": is already being crafted, skipping...")
+      -- Item is actively crafting -> Green (Verde) logic implies working
+      logInfoColoredAfterColon(item .. ": is already being crafted, skipping...", 0x00FF00)
     else
-      -- Support both formats
       local data, threshold, batch_size
       
       if type(cfgItem[1]) == "table" then
@@ -105,12 +97,12 @@ while true do
       local success, msg = ae2.requestItem(item, data, threshold, batch_size)
       
       local color = nil
-      if msg:find("^Failed to request") then
-        color = 0xFF0000
-      elseif msg:find("^Requested") then
-        color = 0xFFFF00
+      if msg:find("^Failed to request") or msg:find("is not craftable") then
+        color = 0xFF0000 -- RED (Error)
       elseif msg:find("The amount %(") and msg:find("Aborting request%.$") then
-        color = 0x00FF00
+        color = 0xFFFF00 -- YELLOW (Threshold Reached / Standby)
+      elseif msg:find("^Requested") then
+        color = 0x00FF00 -- GREEN (Success / Crafting started)
       end
 
       logInfoColoredAfterColon(item .. ": " .. msg, color)
@@ -118,7 +110,7 @@ while true do
   end
 
   local _, _, _, code = event.pull(sleepInterval, "key_down")
-  if code == 0x10 then
+  if code == 0x10 then -- Q key
     exitMaintainer()
   end
 end
