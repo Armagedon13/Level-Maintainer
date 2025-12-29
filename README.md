@@ -25,7 +25,7 @@ Automatically maintain item and fluid levels in your Applied Energistics 2 (AE2)
 
 Download and run the installer:
 ```bash
-wget https://raw.githubusercontent.com/Armagedon13/Level-Maintainer/master/installer.lua && installer
+wget https://raw.githubusercontent.com/kintzo/Level-Maintainer/master/installer.lua && installer
 ```
 
 The installer will:
@@ -209,7 +209,7 @@ This project is open source and available for modification and distribution.
 ## Support
 
 For issues, suggestions, or contributions, please visit:
-https://github.com/Armagedon13/Level-Maintainer
+https://github.com/kintzo/Level-Maintainer
 
 ---
 
