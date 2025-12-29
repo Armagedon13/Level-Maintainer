@@ -24,4 +24,10 @@ cfg["sleep"] = 10
 -- +1 = Central Europe (UTC+1)
 cfg["timezone"] = 0
 
+-- Filter chest configuration (optional)
+-- Set to the side number where the filter chest is connected
+-- 0=bottom, 1=top, 2=back, 3=front, 4=right, 5=left
+-- Any item placed in this chest will pause its maintenance
+cfg["filterChestSide"] = 1 -- Disabled by default, set to 0-5 to enable
+
 return cfg

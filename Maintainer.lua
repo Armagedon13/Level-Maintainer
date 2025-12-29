@@ -9,6 +9,7 @@ local cfg = require("config")
 local items = cfg.items
 local sleepInterval = cfg.sleep
 local timezone = cfg.timezone or 0
+local filterChestSide = cfg.filterChestSide or nil -- Optional filter chest configuration
 
 -- Auto-update check
 pcall(function()
@@ -70,15 +71,61 @@ local function logInfo(msg)
   print("[" .. getLocalTime() .. "] " .. msg)
 end
 
+-- Function to scan filter chest and get paused items
+local function getPausedItems()
+  local pausedItems = {}
+  
+  if not filterChestSide then
+    return pausedItems -- No filter chest configured
+  end
+  
+  if not component.isAvailable("inventory_controller") then
+    logInfo("Warning: Inventory Controller not available, filter chest disabled")
+    return pausedItems
+  end
+  
+  local inv = component.inventory_controller
+  local size = inv.getInventorySize(filterChestSide)
+  
+  if not size or size < 1 then
+    logInfo("Warning: Filter chest not accessible on configured side")
+    return pausedItems
+  end
+  
+  -- Scan all slots in the filter chest
+  for slot = 1, size do
+    local stack = inv.getStackInSlot(filterChestSide, slot)
+    if stack and stack.size and stack.size > 0 then
+      local item_name = stack.label or stack.name
+      if item_name then
+        pausedItems[item_name] = true
+      end
+    end
+  end
+  
+  return pausedItems
+end
+
 while true do
   term.clear()
   term.setCursor(1, 1)
   print("Press Q to exit. Item inspection interval: " .. sleepInterval .. " sec.\n")
 
+  -- Scan filter chest for paused items
+  local pausedItems = getPausedItems()
+  
+  if filterChestSide and next(pausedItems) then
+    local count = 0
+    for _ in pairs(pausedItems) do count = count + 1 end
+    logInfo("Filter chest active - " .. tostring(count) .. " items paused")
+  end
+
   local itemsCrafting = ae2.checkIfCrafting()
 
   for item, cfgItem in pairs(items) do
-    if itemsCrafting[item] then
+    if pausedItems[item] then
+      logInfoColoredAfterColon(item .. ": paused by filter chest", 0x808080) -- Gray color
+    elseif itemsCrafting[item] then
       -- Item is actively crafting -> Green (Verde) logic implies working
       logInfoColoredAfterColon(item .. ": is already being crafted, skipping...", 0x00FF00)
     else
