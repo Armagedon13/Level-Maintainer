@@ -141,18 +141,23 @@ while true do
     if pausedItems[item] then
       logInfoColoredAfterColon(item .. ": paused by filter chest", 0x808080) -- Gray color
     elseif itemsCrafting[item] then
-      -- Item is actively crafting -> Green (Verde) logic implies working
+      -- Item is actively crafting -> Green logic implies working
       logInfoColoredAfterColon(item .. ": is already being crafted, skipping...", 0x00FF00)
     else
-      local data, threshold, batch_size
+      local data, threshold, batch_size, priority
+
       if type(cfgItem[1]) == "table" then
+        -- Formato Pattern.lua / Complejo
         data = cfgItem[1]
         threshold = cfgItem[2]
         batch_size = cfgItem[3]
+        priority = cfgItem[4] or "high"
       else
+        -- Formato Simple / Manual
         data = nil
         threshold = cfgItem[1]
         batch_size = cfgItem[2]
+        priority = cfgItem[3] or "high"
       end
 
       if priority == "high" or allowLow then
