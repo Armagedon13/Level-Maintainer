@@ -2,7 +2,7 @@ local component = require("component")
 local ME = component.me_interface
 local gpu = component.gpu
 
--- Locals
+-- Lua micro-optimizations
 local pairs = pairs
 local tostring = tostring
 local type = type
@@ -24,13 +24,19 @@ local snapshot = {
     cpus = {}
 }
 
--- fast helper to clean names
+--------------------------------------------------------------------------------
+-- HELPER
+--------------------------------------------------------------------------------
 local function cleanName(name)
-    return string_gsub(string_gsub(name:lower(), "^drop of ", ""), "^molten ", "")
+    if not name then return "" end
+    local noColor = string_gsub(name, "§.", "")
+    local trimmed = noColor:match("^%s*(.-)%s*$") or noColor
+    local lower = trimmed:lower()
+    return string_gsub(string_gsub(lower, "^drop of ", ""), "^molten ", "")
 end
 
 --------------------------------------------------------------------------------
--- SNAPSHOT SYSTEM beta
+-- SNAPSHOT SYSTEM
 --------------------------------------------------------------------------------
 
 function AE2.updateSnapshot()
@@ -38,41 +44,47 @@ function AE2.updateSnapshot()
     snapshot.items = {}
     snapshot.fluids = {}
     
-    -- 2. MASSIVE Item Download Only 1 network call
+    -- 2. Items
     local allItems = ME.getItemsInNetwork()
     if allItems then
         for _, item in pairs(allItems) do
-            -- Sum sizes in case of variants with same name
             local label = item.label
             if label then
+                -- Store exact name
                 snapshot.items[label] = (snapshot.items[label] or 0) + item.size
+                
+                -- Store clean name (fallback for messy configs)
+                local clean = cleanName(label)
+                if clean ~= label then
+                    snapshot.items[clean] = (snapshot.items[clean] or 0) + item.size
+                end
             end
         end
     end
 
-    -- 3. MASSIVE Fluid Download Only 1 network call the same but with fluids
+    -- 3. Fluids FIXED: Handles duplicates and color codes -> need more testing
     local allFluids = ME.getFluidsInNetwork()
     if allFluids then
         for _, fluid in pairs(allFluids) do
             local label = fluid.label
             if label then
-                -- Store by exact name
+                -- A. Store by EXACT name (with colors)
                 snapshot.fluids[label] = (snapshot.fluids[label] or 0) + fluid.amount
-                -- Store by "clean" name for lookup
+                -- B. Store by CLEAN name (Key for threshold matching)
+                -- This aggregates same fluid from different drives/tanks
                 local clean = cleanName(label)
-                if clean ~= label:lower() then
+                if clean ~= label then
                     snapshot.fluids[clean] = (snapshot.fluids[clean] or 0) + fluid.amount
                 end
             end
         end
     end
 
-    -- 4. CPU Status Download
+    -- 4. CPUs
     snapshot.cpus = {}
     local cpus = ME.getCpus()
     if cpus then
         for _, cpu in pairs(cpus) do
-            -- Store only necessary info to save RAM
             local info = {
                 isBusy = cpu.cpu.isBusy(),
                 craftingLabel = nil
@@ -87,21 +99,19 @@ function AE2.updateSnapshot()
 end
 
 --------------------------------------------------------------------------------
--- DATA READING
+-- DATA READING (Reads from RAM, not Network)
 --------------------------------------------------------------------------------
 
 function AE2.getStock(name)
-    -- hash table lookup
-    local itemStock = snapshot.items[name] or 0
-    
-    local fluidStock = snapshot.fluids[name] or 0
-    if fluidStock == 0 then
-        fluidStock = snapshot.fluids[cleanName(name)] or 0
-    end
+    -- 1. Exact Lookup
+    local exactStock = snapshot.items[name] or snapshot.fluids[name] or 0
+    if exactStock > 0 then return exactStock end
 
-    -- Fluid priority (GTNH Logic)
-    if fluidStock > 0 then return fluidStock end
-    return itemStock
+    -- 2. Fuzzy/Clean Lookup (Ignores colors, case, prefixes)
+    local clean = cleanName(name)
+    local fuzzyStock = snapshot.items[clean] or snapshot.fluids[clean] or 0
+    
+    return fuzzyStock
 end
 
 function AE2.getCpusSnapshotted()
@@ -113,13 +123,15 @@ function AE2.checkIfCraftingSnapshotted()
     for _, cpu in pairs(snapshot.cpus) do
         if cpu.craftingLabel then
             activeCrafts[cpu.craftingLabel] = true
+            -- Also mark the clean name as crafting
+            activeCrafts[cleanName(cpu.craftingLabel)] = true
         end
     end
     return activeCrafts
 end
 
 --------------------------------------------------------------------------------
--- UTILITIES
+-- UTILITIES & REQUEST
 --------------------------------------------------------------------------------
 
 function AE2.printColoredAfterColon(line, color)
@@ -166,10 +178,6 @@ local function getCraftableForItem(itemName)
   return craftable
 end
 
---------------------------------------------------------------------------------
--- CRAFTING REQUEST
---------------------------------------------------------------------------------
-
 function AE2.requestItem(name, data, threshold, count)
   local craftable = getCraftableForItem(name)
   if not craftable then
@@ -177,7 +185,7 @@ function AE2.requestItem(name, data, threshold, count)
   end
 
   if threshold and threshold > 0 then
-    -- Use snapshot stock
+    -- OPTIMIZATION: Use snapshot stock (Instant & Clean name aware)
     local currentStock = AE2.getStock(name)
 
     if currentStock >= threshold then

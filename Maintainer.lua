@@ -2,14 +2,15 @@ local term = require("term")
 local event = require("event")
 local component = require("component")
 local gpu = component.gpu
+-- Filesystem required for Real Time hack
+local filesystem = require("filesystem") 
 local ae2 = require("src.AE2")
 local cfg = require("config")
 
--- Localizing functions
+-- Localizing functions for speed
 local pairs = pairs
 local tostring = tostring
 local os_date = os.date
-local os_time = os.time
 local io_write = io.write
 local print = print
 
@@ -18,19 +19,40 @@ local sleepInterval = cfg.sleep
 local timezone = cfg.timezone or 0
 local filterChestSide = cfg.filterChestSide -- Optional
 
--- Silent auto-update
+-- auto-update
 pcall(function()
   local shell = require("shell")
   shell.execute("updater silent")
 end)
 
--- TIME
+--------------------------------------------------------------------------------
+-- TIME CORRECTION
+-- Required because os.time() in OC 1.7.10 returns Game Time, not Real Time.
+--------------------------------------------------------------------------------
+local function getRealTime()
+  local tempfile = "/tmp/timefile"
+  -- Create empty temp file
+  local file = filesystem.open(tempfile, "w")
+  if file then
+    file:close()
+    -- Read modification time (This gives Real Time from Host OS)
+    local timestamp = filesystem.lastModified(tempfile) / 1000
+    -- Cleanup
+    filesystem.remove(tempfile)
+    return timestamp
+  else
+    -- Fallback
+    return os.time()
+  end
+end
+
 local function getLocalTime()
-    -- Simple timezone adjustment on host time idk this meybe cannot work
-    local now = os_time()
-    local offsetTime = now + (timezone * 3600)
+    local realTime = getRealTime()
+    -- Apply timezone offset (e.g., -3 for Argentina)
+    local offsetTime = realTime + (timezone * 3600)
     return os_date("%H:%M:%S", offsetTime)
 end
+--------------------------------------------------------------------------------
 
 local function logInfoColoredAfterColon(msg, color)
     if type(msg) ~= "string" then msg = tostring(msg) end
@@ -81,8 +103,8 @@ while true do
     term.setCursor(1, 1)
     print("Press Q to exit. Item inspection interval: " .. sleepInterval .. " sec.\n")
 
-    -- 1. TAKE SNAPSHOT
-    -- This makes exactly 3 network calls total, regardless of item count.
+    -- 1. TAKE SNAPSHOT (The only heavy operation of the cycle)
+    -- Makes 3 network calls total, regardless of item count.
     ae2.updateSnapshot()
 
     -- 2. Process logic with in-memory data
@@ -97,7 +119,7 @@ while true do
     local itemsCrafting = ae2.checkIfCraftingSnapshotted()
     local cpus = ae2.getCpusSnapshotted()
 
-    -- Smart Priority Logic
+    -- Smart Priority Logic (Anti-Clog)
     local allowLow = true
     for _, cpu in pairs(cpus) do
         if cpu.isBusy then
@@ -110,7 +132,7 @@ while true do
         end
     end
 
-    -- 3. Iterate items
+    -- 3. Iterate items (Pure CPU processing, ultra fast)
     for item, cfgItem in pairs(items) do
         -- A. Is it paused by filter chest?
         if pausedItems[item] then
@@ -135,7 +157,7 @@ while true do
                 priority = cfgItem[3] or "high"
             end
 
-            -- D. Execute or skip based on priority 
+            -- D. Execute (or skip based on priority)
             if priority == "high" or allowLow then
                 local success, msg = ae2.requestItem(item, data, threshold, batch_size)
                 
@@ -155,7 +177,7 @@ while true do
         end
     end
 
-    -- Press 'Q' key to exit
+    -- Handle 'Q' key to exit
     local _, _, _, code = event.pull(sleepInterval, "key_down")
     if code == 0x10 then 
         term.clear()
