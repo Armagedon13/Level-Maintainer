@@ -53,20 +53,43 @@ local function formatNumber(num)
   return table.concat(parts, "_")
 end
 
+-- Function to get or cache a specific craftable item
 local function getCraftableForItem(itemName)
   local currentTime = os.time()
+  
+  -- Check if we have a cached version of this specific item and it's still valid
+  if itemCache[itemName] and currentTime - cacheTimestamp < CACHE_DURATION then
+    return itemCache[itemName]
+  end
+  
+  -- If cache is too old, clear it completely to save memory
   if currentTime - cacheTimestamp >= CACHE_DURATION then
     itemCache = {}
     cacheTimestamp = currentTime
-  else
-    if itemCache[itemName] then
-      return itemCache[itemName]
-    end
   end
+  
+  -- Look for this specific item in craftables
   local craftables = ME.getCraftables({label = itemName})
-  local craftable = craftables and craftables[1] or nil
-  itemCache[itemName] = craftable
-  return craftable
+  if craftables and #craftables >= 1 then
+    itemCache[itemName] = craftables[1] -- Cache only this one item
+    return craftables[1]
+  end
+  
+  itemCache[itemName] = nil -- Cache that it's not craftable
+  return nil
+end
+
+-- Helper function to detect if an item is a fluid drop
+local function isFluidDrop(name)
+  local lowerName = name:lower()
+  return lowerName:find("^drop of ") or lowerName:find("^molten ")
+end
+
+-- Helper function to extract fluid name from drop name
+local function extractFluidName(dropName)
+  local cleaned = dropName:gsub("^[Dd]rop [Oo]f ", ""):gsub("^[Mm]olten ", "")
+  -- Convert to fluid tag format (e.g., "Molten SpaceTime" -> "molten.spacetime")
+  return cleaned:lower():gsub(" ", ".")
 end
 
 -- Returns: success:boolean, message:string
@@ -76,41 +99,56 @@ function AE2.requestItem(name, data, threshold, count)
     return false, "is not craftable!"
   end
 
-  -- Check Thresholds (Fluid + Item logic)
+  -- Check Thresholds
   if threshold and threshold > 0 then
     local currentStock = 0
-    local fluidStock = 0
-    local itemStock = 0
-
-    -- 1. Check Fluids
-    local fluids = ME.getFluidsInNetwork()
-    if fluids then
-        local cleanName = name:gsub("^[Dd]rop [Oo]f ", ""):gsub("^[Mm]olten ", ""):lower()
-        local targetNameLower = name:lower()
-        
-        for _, f in pairs(fluids) do
-            local labelLower = (f.label or ""):lower()
-            if labelLower == targetNameLower or labelLower == cleanName then
-                fluidStock = fluidStock + f.amount
-            end
+    local itemInSystem = nil
+    
+    -- Detect if this is a fluid drop
+    local isFluid = isFluidDrop(name)
+    
+    if isFluid then
+      -- Usar getItemInNetwork con ae2fc:fluid_drop y NBT tag
+      local fluidName = extractFluidName(name)
+      
+      if data and data.fluid_tag then
+        local fluidTag = '{Fluid:' .. data.fluid_tag .. '}'
+        itemInSystem = ME.getItemInNetwork("ae2fc:fluid_drop", 0, fluidTag)
+      else
+        local fluidTag = '{Fluid:' .. fluidName .. '}'
+        itemInSystem = ME.getItemInNetwork("ae2fc:fluid_drop", 0, fluidTag)
+      end
+      
+      if itemInSystem then
+        currentStock = itemInSystem.size or 0
+      end
+    else
+      local item = craftable.getItemStack()
+      
+      if item and item.name then
+        if data and data.item_id then
+          local itemName = data.item_id
+          local itemDamage = data.item_meta or 0
+          itemInSystem = ME.getItemInNetwork(itemName, itemDamage)
+        else
+          -- Try with tag first
+          if item.tag then
+            itemInSystem = ME.getItemInNetwork(item.name, item.damage or 0, item.tag)
+          end
+          
+          -- Fallback: try without tag
+          if itemInSystem == nil then
+            itemInSystem = ME.getItemInNetwork(item.name, item.damage or 0)
+          end
         end
-    end
-
-    -- 2. Check Items
-    local itemsFound = ME.getItemsInNetwork({ label = name })
-    if itemsFound then
-      for _, i in pairs(itemsFound) do
-        itemStock = itemStock + i.size
+        
+        if itemInSystem then
+          currentStock = itemInSystem.size or 0
+        end
       end
     end
 
-    -- 3. Calculate Total (Prioritize Fluid)
-    if fluidStock > 0 then
-        currentStock = fluidStock
-    else
-        currentStock = itemStock
-    end
-
+    -- Check if threshold is met
     if currentStock >= threshold then
       local currentFmt = formatNumber(currentStock)
       local thresholdFmt = formatNumber(threshold)
@@ -129,7 +167,6 @@ function AE2.requestItem(name, data, threshold, count)
     end
 
     if craft.hasFailed() then
-      -- Modificación: Mensaje simple sin la razón entre corchetes
       return false, "Failed to request " .. formatNumber(count)
     else
       return true, "Requested " .. formatNumber(count)
@@ -150,6 +187,7 @@ function AE2.checkIfCrafting()
   return items
 end
 
+-- Function to manually clear the cache if needed
 function AE2.clearCache()
   itemCache = {}
   cacheTimestamp = 0

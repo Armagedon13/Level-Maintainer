@@ -10,7 +10,7 @@ local items = cfg.items
 local sleepInterval = cfg.sleep
 local timezone = cfg.timezone or 0
 local filterChestSide = cfg.filterChestSide or nil 
-local showTime = cfg.showTime -- Leer configuración (true/false)
+local showTime = cfg.showTime
 
 -- Auto-update check
 pcall(function()
