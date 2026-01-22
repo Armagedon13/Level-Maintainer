@@ -12,6 +12,10 @@ local timezone = cfg.timezone or 0
 local filterChestSide = cfg.filterChestSide or nil 
 local showTime = cfg.showTime
 
+local cpuStatusCache = {}
+local cpuStatusCacheTime = 0
+local CPU_CACHE_DURATION = 2
+
 -- Auto-update check
 pcall(function()
   local shell = require("shell")
@@ -87,7 +91,7 @@ local function getPausedItems()
   local pausedItems = {}
   
   if not filterChestSide then
-    return pausedItems -- No filter chest configured
+    return pausedItems
   end
   
   if not component.isAvailable("inventory_controller") then
@@ -103,7 +107,6 @@ local function getPausedItems()
     return pausedItems
   end
   
-  -- Scan all slots in the filter chest
   for slot = 1, size do
     local stack = inv.getStackInSlot(filterChestSide, slot)
     if stack and stack.size and stack.size > 0 then
@@ -115,6 +118,33 @@ local function getPausedItems()
   end
   
   return pausedItems
+end
+
+-- OPTIMIZACIÓN: Función para obtener CPU status con caché
+local function getCpuStatusCached()
+  local currentTime = os.time()
+  
+  if currentTime - cpuStatusCacheTime >= CPU_CACHE_DURATION then
+    cpuStatusCache = ae2.getCpuStatus and ae2.getCpuStatus() or {}
+    cpuStatusCacheTime = currentTime
+  end
+  
+  return cpuStatusCache
+end
+
+-- OPTIMIZACIÓN: Pre-calcular itemsCrafting una sola vez por ciclo
+local itemsCraftingCache = {}
+local itemsCraftingCacheTime = 0
+
+local function getItemsCraftingCached()
+  local currentTime = os.time()
+  
+  if currentTime - itemsCraftingCacheTime >= CPU_CACHE_DURATION then
+    itemsCraftingCache = ae2.checkIfCrafting()
+    itemsCraftingCacheTime = currentTime
+  end
+  
+  return itemsCraftingCache
 end
 
 while true do
@@ -131,58 +161,107 @@ while true do
     logInfo("Filter chest active - " .. tostring(count) .. " items paused")
   end
 
-  local itemsCrafting = ae2.checkIfCrafting()
+  local itemsCrafting = getItemsCraftingCached()
 
   -- Allow Crafting of low priority items only if all CPUs are either idle or crafting other stocked items
   local allowLow = true
-  local cpus = ae2.getCpuStatus and ae2.getCpuStatus() or {}
+
+  local cpus = getCpuStatusCached()
+  
   for _, cpu in ipairs(cpus) do
     if cpu.isBusy then
       local crafting = cpu.craftingLabel
       if crafting and not items[crafting] then
-        -- busy with something not in config
         allowLow = false
         break
       end
     end
   end
 
+  local highPriorityItems = {}
+  local lowPriorityItems = {}
+  
   for item, cfgItem in pairs(items) do
+    local priority = cfgItem[4] or cfgItem[3]
+    if type(priority) == "string" and priority == "low" then
+      table.insert(lowPriorityItems, {name = item, config = cfgItem})
+    else
+      table.insert(highPriorityItems, {name = item, config = cfgItem})
+    end
+  end
+
+  for _, itemData in ipairs(highPriorityItems) do
+    local item = itemData.name
+    local cfgItem = itemData.config
+    
     if pausedItems[item] then
-      logInfoColoredAfterColon(item .. ": paused by filter chest", 0x808080) -- Gray color
+      logInfoColoredAfterColon(item .. ": paused by filter chest", 0x808080)
     elseif itemsCrafting[item] then
-      -- Item is actively crafting -> Green logic implies working
       logInfoColoredAfterColon(item .. ": is already being crafted, skipping...", 0x00FF00)
     else
-      local data, threshold, batch_size, priority
+      local data, threshold, batch_size
 
       if type(cfgItem[1]) == "table" then
         data = cfgItem[1]
         threshold = cfgItem[2]
         batch_size = cfgItem[3]
-        priority = cfgItem[4] or "high"
       else
         data = nil
         threshold = cfgItem[1]
         batch_size = cfgItem[2]
-        priority = cfgItem[3] or "high"
       end
 
-      if priority == "high" or allowLow then
+      local success, msg = ae2.requestItem(item, data, threshold, batch_size)
+      local color = nil
+      if msg:find("^Failed to request") or msg:find("is not craftable") then
+        color = 0xFF0000
+      elseif msg:find("The amount %(") and msg:find("Aborting request%.$") then
+        color = 0xFFFF00
+      elseif msg:find("^Requested") then
+        color = 0x00FF00
+      end
+      logInfoColoredAfterColon(item .. ": " .. msg, color)
+    end
+  end
+  
+  if allowLow then
+    for _, itemData in ipairs(lowPriorityItems) do
+      local item = itemData.name
+      local cfgItem = itemData.config
+      
+      if pausedItems[item] then
+        logInfoColoredAfterColon(item .. ": paused by filter chest", 0x808080)
+      elseif itemsCrafting[item] then
+        logInfoColoredAfterColon(item .. ": is already being crafted, skipping...", 0x00FF00)
+      else
+        local data, threshold, batch_size
+
+        if type(cfgItem[1]) == "table" then
+          data = cfgItem[1]
+          threshold = cfgItem[2]
+          batch_size = cfgItem[3]
+        else
+          data = nil
+          threshold = cfgItem[1]
+          batch_size = cfgItem[2]
+        end
+
         local success, msg = ae2.requestItem(item, data, threshold, batch_size)
         local color = nil
         if msg:find("^Failed to request") or msg:find("is not craftable") then
-          color = 0xFF0000 -- RED (Error)
+          color = 0xFF0000
         elseif msg:find("The amount %(") and msg:find("Aborting request%.$") then
-          color = 0xFFFF00 -- YELLOW (Threshold Reached / Standby)
+          color = 0xFFFF00
         elseif msg:find("^Requested") then
-          color = 0x00FF00 -- GREEN (Success / Crafting started)
+          color = 0x00FF00
         end
         logInfoColoredAfterColon(item .. ": " .. msg, color)
-      else
-        color = 0x808080 -- GRAY (Low priority skipped)
-        logInfoColoredAfterColon(item .. ": Low priority, CPUs busy with non-stocked jobs, skipping...", color)
       end
+    end
+  else
+    for _, itemData in ipairs(lowPriorityItems) do
+      local item = itemData.name
+      logInfoColoredAfterColon(item .. ": Low priority, CPUs busy with non-stocked jobs, skipping...", 0x808080)
     end
   end
 
