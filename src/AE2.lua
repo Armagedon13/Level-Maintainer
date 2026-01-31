@@ -108,7 +108,6 @@ function AE2.requestItem(name, data, threshold, count)
     local isFluid = isFluidDrop(name)
     
     if isFluid then
-      -- Usar getItemInNetwork con ae2fc:fluid_drop y NBT tag
       local fluidName = extractFluidName(name)
       
       if data and data.fluid_tag then
@@ -128,17 +127,17 @@ function AE2.requestItem(name, data, threshold, count)
       if item and item.name then
         if data and data.item_id then
           local itemName = data.item_id
-          local itemDamage = data.item_meta or 0
+          local itemDamage = tonumber(data.item_meta) or 0
           itemInSystem = ME.getItemInNetwork(itemName, itemDamage)
         else
-          -- Try with tag first
+          local damage = tonumber(item.damage) or 0
+          
           if item.tag then
-            itemInSystem = ME.getItemInNetwork(item.name, item.damage or 0, item.tag)
+            itemInSystem = ME.getItemInNetwork(item.name, damage, item.tag)
           end
           
-          -- Fallback: try without tag
           if itemInSystem == nil then
-            itemInSystem = ME.getItemInNetwork(item.name, item.damage or 0)
+            itemInSystem = ME.getItemInNetwork(item.name, damage)
           end
         end
         
